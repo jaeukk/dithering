@@ -59,6 +59,7 @@ class BaseStipple:
         self.hsv_data = {} # {color_key: {'v': v_data, 's': s_data}}
         self.hsv_interpolators = {} # {color_key: {'v': interp, 's': interp}}
         self.density_interpolators = {} # {color_key: density_interp}
+        self.dome_library = None
 
         if self.image_data is not None:
             self.create_rgb_interpolators()
@@ -197,3 +198,15 @@ class BaseStipple:
             self.density_interpolators[color_key] = RegularGridInterpolator(
                 (y, x), flipped_density, bounds_error=False, fill_value=0
             )
+
+    def set_dome_library(self, dome_library):
+        """
+        Set the dome_library attribute.
+        """
+        self.dome_library = dome_library
+
+    def get_dome_library(self):
+        """
+        Get the dome_library attribute.
+        """
+        return self.dome_library

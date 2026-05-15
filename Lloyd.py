@@ -21,7 +21,46 @@ def lloyd_relaxation(points, bounds, alpha=0.2, iterations=1, n_padding=10):
     """
     return modified_lloyd_relaxation(points, bounds, rho=None, alpha=alpha, iterations=iterations, n_padding=n_padding)
 
-def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1, samp_pts = 200, n_padding=10, padding_pts=None):
+def generate_padding_pts(bounds, n_padding, padding_factor=0.1):
+    """
+    Generates padding points around the bounding box.
+    
+    Args:
+        bounds (tuple): (xmin, xmax, ymin, ymax) defining the bounding box.
+        n_padding (int): Number of padding points along each edge.
+        padding_factor (float): Factor to determine padding distance relative to max dimension.
+        
+    Returns:
+        np.ndarray: Array of padding point coordinates.
+    """
+    xmin, xmax, ymin, ymax = bounds
+    padding = max(xmax - xmin, ymax - ymin) * padding_factor
+    padding_pts_list = []
+    
+    x_range = np.linspace(xmin - padding, xmax + padding, n_padding)
+    y_range = np.linspace(ymin - padding, ymax + padding, n_padding)
+    
+    # Layer 1
+    for x in x_range:
+        padding_pts_list.append([x, ymin - padding])
+        padding_pts_list.append([x, ymax + padding])
+    for y in y_range:
+        padding_pts_list.append([xmin - padding, y])
+        padding_pts_list.append([xmax + padding, y])
+
+    # Layer 2 (Zigzag)
+    dx = x_range[1] - x_range[0]
+    dy = y_range[1] - y_range[0]
+    padding2 = padding * 2
+    for x in x_range + dx / 2:
+        padding_pts_list.append([x, ymin - padding2])
+        padding_pts_list.append([x, ymax + padding2])
+    for y in y_range + dy / 2:
+        padding_pts_list.append([xmin - padding2, y])
+        padding_pts_list.append([xmax + padding2, y])
+    return np.array(padding_pts_list)
+
+def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1, samp_pts = 200, n_padding=10, padding_pts=None, return_voronoi=False):
     """
     Performs modified Lloyd relaxation on a set of points with a density function.
     
@@ -36,48 +75,18 @@ def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1,
         iterations (int): Number of relaxation steps.
         samp_pts (int): Number of sampling points for weighted centroid calculation.
         n_padding (int): Number of padding points along each edge.
+        return_voronoi (bool): If True, return (new_points, vor).
         
     Returns:
-        np.ndarray: Updated point coordinates.
+        np.ndarray or tuple: Updated point coordinates, or (updated coordinates, Voronoi object).
     """
     xmin, xmax, ymin, ymax = bounds
     new_points = points.copy()
     
     if padding_pts is None:
-        # Add dummy points to ensure all real points have closed Voronoi cells within bounds
-        # padding = max(xmax - xmin, ymax - ymin) * 2
-        # dummy_points = np.array([
-        #     [xmin - padding, ymin - padding],
-        #     [xmin - padding, ymax + padding],
-        #     [xmax + padding, ymin - padding],
-        #     [xmax + padding, ymax + padding]
-        # ])
-        padding = max(xmax - xmin, ymax - ymin) * 0.1
-        padding_pts_list = []
-        
-        x_range = np.linspace(xmin - padding, xmax + padding, n_padding)
-        y_range = np.linspace(ymin - padding, ymax + padding, n_padding)
-        
-        # Layer 1
-        for x in x_range:
-            padding_pts_list.append([x, ymin - padding])
-            padding_pts_list.append([x, ymax + padding])
-        for y in y_range:
-            padding_pts_list.append([xmin - padding, y])
-            padding_pts_list.append([xmax + padding, y])
+        padding_pts = generate_padding_pts(bounds, n_padding)
 
-        # Layer 2 (Zigzag)
-        dx = x_range[1] - x_range[0]
-        dy = y_range[1] - y_range[0]
-        padding2 = padding * 2
-        for x in x_range + dx / 2:
-            padding_pts_list.append([x, ymin - padding2])
-            padding_pts_list.append([x, ymax + padding2])
-        for y in y_range + dy / 2:
-            padding_pts_list.append([xmin - padding2, y])
-            padding_pts_list.append([xmax + padding2, y])
-        padding_pts = np.array(padding_pts_list)
-
+    vor = None
     for _ in range(iterations):
         # To handle boundary conditions for Voronoi, we can mirror points or use a large bounding box
         # For simplicity in this implementation, we'll use a standard Voronoi and clip/intersect
@@ -121,6 +130,9 @@ def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1,
             updated_pts.append(new_pos)
             
         new_points = np.array(updated_pts)
+    
+    if return_voronoi:
+        return new_points, vor
         
     return new_points
 
