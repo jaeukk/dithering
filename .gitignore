@@ -1,2 +1,4 @@
-./*.png
+*.png
 __pycache__/*
+Image_to_TIR.ipynb
+test/*

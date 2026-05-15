@@ -1,7 +1,8 @@
 import numpy as np
 from scipy.spatial import Voronoi
+from scipy.spatial.qhull import QhullError
 
-def lloyd_relaxation(points, bounds, alpha=0.2, iterations=1, padding = None):
+def lloyd_relaxation(points, bounds, alpha=0.2, iterations=1, n_padding=10):
     """
     Performs ordinary Lloyd relaxation on a set of points.
     
@@ -13,13 +14,14 @@ def lloyd_relaxation(points, bounds, alpha=0.2, iterations=1, padding = None):
         bounds (tuple): (xmin, xmax, ymin, ymax) defining the bounding box.
 		alpha (float): Convergence speed in (0, 1].
         iterations (int): Number of relaxation steps.
+        n_padding (int): Number of padding points along each edge.
         
     Returns:
         np.ndarray: Updated point coordinates.
     """
-    return modified_lloyd_relaxation(points, bounds, rho=None, alpha=alpha, iterations=iterations, padding_pts=padding)
+    return modified_lloyd_relaxation(points, bounds, rho=None, alpha=alpha, iterations=iterations, n_padding=n_padding)
 
-def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1, samp_pts = 200, padding_pts=None):
+def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1, samp_pts = 200, n_padding=10, padding_pts=None):
     """
     Performs modified Lloyd relaxation on a set of points with a density function.
     
@@ -32,6 +34,8 @@ def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1,
         rho (callable, optional): Density function rho(x, y). If None, constant density is assumed.
         alpha (float): Convergence speed in (0, 1].
         iterations (int): Number of relaxation steps.
+        samp_pts (int): Number of sampling points for weighted centroid calculation.
+        n_padding (int): Number of padding points along each edge.
         
     Returns:
         np.ndarray: Updated point coordinates.
@@ -39,26 +43,40 @@ def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1,
     xmin, xmax, ymin, ymax = bounds
     new_points = points.copy()
     
-    # Add dummy points to ensure all real points have closed Voronoi cells within bounds
-    # padding = max(xmax - xmin, ymax - ymin) * 2
-    # dummy_points = np.array([
-    #     [xmin - padding, ymin - padding],
-    #     [xmin - padding, ymax + padding],
-    #     [xmax + padding, ymin - padding],
-    #     [xmax + padding, ymax + padding]
-    # ])
-    padding = max(xmax - xmin, ymax - ymin) * 0.1
-    padding_pts = np.zeros((0,2))
-    
-    x_range = np.linspace(xmin - padding, xmax + padding, 10)
-    y_range = np.linspace(ymin - padding, ymax + padding, 10)
-    
-    for x in x_range:
-        padding_pts = np.vstack([padding_pts, [x, ymin - padding]])
-        padding_pts = np.vstack([padding_pts, [x, ymax + padding]])
-    for y in y_range:
-        padding_pts = np.vstack([padding_pts, [xmin - padding, y]])
-        padding_pts = np.vstack([padding_pts, [xmax + padding, y]])
+    if padding_pts is None:
+        # Add dummy points to ensure all real points have closed Voronoi cells within bounds
+        # padding = max(xmax - xmin, ymax - ymin) * 2
+        # dummy_points = np.array([
+        #     [xmin - padding, ymin - padding],
+        #     [xmin - padding, ymax + padding],
+        #     [xmax + padding, ymin - padding],
+        #     [xmax + padding, ymax + padding]
+        # ])
+        padding = max(xmax - xmin, ymax - ymin) * 0.1
+        padding_pts_list = []
+        
+        x_range = np.linspace(xmin - padding, xmax + padding, n_padding)
+        y_range = np.linspace(ymin - padding, ymax + padding, n_padding)
+        
+        # Layer 1
+        for x in x_range:
+            padding_pts_list.append([x, ymin - padding])
+            padding_pts_list.append([x, ymax + padding])
+        for y in y_range:
+            padding_pts_list.append([xmin - padding, y])
+            padding_pts_list.append([xmax + padding, y])
+
+        # Layer 2 (Zigzag)
+        dx = x_range[1] - x_range[0]
+        dy = y_range[1] - y_range[0]
+        padding2 = padding * 2
+        for x in x_range + dx / 2:
+            padding_pts_list.append([x, ymin - padding2])
+            padding_pts_list.append([x, ymax + padding2])
+        for y in y_range + dy / 2:
+            padding_pts_list.append([xmin - padding2, y])
+            padding_pts_list.append([xmax + padding2, y])
+        padding_pts = np.array(padding_pts_list)
 
     for _ in range(iterations):
         # To handle boundary conditions for Voronoi, we can mirror points or use a large bounding box
@@ -67,7 +85,12 @@ def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1,
         
         
         pts_to_vor = np.vstack([new_points, padding_pts])
-        vor = Voronoi(pts_to_vor)
+        try:
+            vor = Voronoi(pts_to_vor)
+        except QhullError:
+            # Perturb points slightly to avoid precision errors (e.g., flat simplex)
+            perturbation = np.random.normal(0, 1e-10 * max(xmax - xmin, ymax - ymin), pts_to_vor.shape)
+            vor = Voronoi(pts_to_vor + perturbation)
         
         updated_pts = []
         for i in range(len(new_points)):
@@ -91,7 +114,7 @@ def modified_lloyd_relaxation(points, bounds, rho=None, alpha=1.0, iterations=1,
                 c_i = _calculate_polygon_centroid(vertices)
             else:
                 # Weighted centroid using density function rho
-                c_i = _calculate_weighted_centroid(vertices, rho, samp_pts)
+                c_i = _calculate_weighted_centroid(vertices, rho, new_points[i], samp_pts)
             
             # Update position: s_i = s_i + alpha * (c_i - s_i)
             new_pos = new_points[i] + alpha * (c_i - new_points[i])
@@ -120,7 +143,7 @@ def _calculate_polygon_centroid(vertices):
     
     return np.array([cx, cy])
 
-def _calculate_weighted_centroid(vertices, rho, samples=200):
+def _calculate_weighted_centroid(vertices, rho, point, samples=200):
     """
     Calculates the weighted centroid of a polygon using a density function rho.
     Approximated by sampling within the bounding box of the polygon.
@@ -150,7 +173,7 @@ def _calculate_weighted_centroid(vertices, rho, samples=200):
     total_weight = np.sum(weights)
     
     if total_weight < 1e-10:
-        return _calculate_polygon_centroid(vertices)
+        return point # _calculate_polygon_centroid(vertices)
         
     cx = np.sum(inside_pts[:, 0] * weights) / total_weight
     cy = np.sum(inside_pts[:, 1] * weights) / total_weight
