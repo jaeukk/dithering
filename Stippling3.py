@@ -4,6 +4,7 @@ from scipy.spatial import Voronoi
 from matplotlib.path import Path
 import os
 import sys
+import pickle
 
 # Adjust sys.path to import Pixels and Lloyd, CConversions
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -304,46 +305,60 @@ class SequentialStipple(BaseStipple):
         if self.cell_data is None or self.pt_map is None:
             raise ValueError("get_average_colors must be called before assign_colors.")
 
-          #1.0 / self.length2pixel
-
         # Type Assignment (Sequential)
+        # 1. Assign the perfect matches
+        max_radius = max(dt["radius"] for dt in self.dome_library)
         for idx, cell in enumerate(self.cell_data):
             target_lab = cell['lab']
             
             best_match_idx = -1
             min_dist = float('inf')
             
+            corr_factor = np.pi * (max_radius / self.length2pixel)**2 / cell['area'] / self.max_area_fraction
             for t_idx, d_type in enumerate(self.dome_library):
-                dist = cc.delta_e_cie76(target_lab, d_type['lab'])
+                dist = cc.delta_e_cie76(target_lab, d_type['lab'] * corr_factor)
                 if dist < min_dist:
                     min_dist = dist
                     best_match_idx = t_idx
+            
+            # Store assigned type if close enough, else store encoded negative index for refinement
+            cell['assigned_type'] = best_match_idx if min_dist < error else -1 * (best_match_idx + 2)
 
-            if min_dist < error:
-                assigned_type = best_match_idx
-            else:
-                neighbor_assignments = [self.cell_data[n]['assigned_type'] for n in cell['neighbors'] if self.cell_data[n]['assigned_type'] != -1]
+        # 2. Refine unassigned cells by considering neighbors
+        for idx, cell in enumerate(self.cell_data):
+            # Recalculate corr_factor for the current cell as it depends on cell['area']
+            corr_factor = np.pi * (max_radius / self.length2pixel)**2 / cell['area'] / self.max_area_fraction
+            
+            if cell['assigned_type'] < -1:
+                # Recover the initial best match from encoded negative index
+                initial_best_t = -cell['assigned_type'] - 2
                 
-                if not neighbor_assignments:
-                    assigned_type = best_match_idx
+                # Identify assigned neighbors to balance color
+                neigh_indices = [n for n in cell['neighbors'] if self.cell_data[n]['assigned_type'] >= 0]
+                
+                if not neigh_indices:
+                    assigned_type = initial_best_t
                 else:
-                    neigh_indices = [n for n in cell['neighbors'] if self.cell_data[n]['assigned_type'] != -1]
-                    total_inv_area = sum(1.0 / self.cell_data[n]['area'] for n in neigh_indices)
-                    mean_neigh_xyz = sum((self.dome_library[self.cell_data[n]['assigned_type']]['xyz']) * (1.0 / self.cell_data[n]['area']) for n in neigh_indices) / total_inv_area
+                    total_area = sum(self.cell_data[n]['area'] for n in neigh_indices)
+                    # Correctly decode neighbor's encoded type before indexing dome_library
+                    mean_neigh_xyz = sum(self.dome_library[self.cell_data[n]['assigned_type']]['xyz'] for n in neigh_indices) * corr_factor / total_area
                     
                     best_t = -1
                     min_err = float('inf')
                     for t_idx, d_type in enumerate(self.dome_library):
-                        new_mean_xyz = (mean_neigh_xyz * total_inv_area + d_type['xyz'] * (1.0 / cell['area'])) / (total_inv_area + 1.0 / cell['area'])
+                        new_mean_xyz = (mean_neigh_xyz * total_area + d_type['xyz'] * corr_factor) / (total_area + cell['area'])
                         err = np.linalg.norm(new_mean_xyz - cell['xyz'])
                         if err < min_err:
                             min_err = err
                             best_t = t_idx
                     assigned_type = best_t
+                
+                cell['assigned_type'] = assigned_type
             
-            cell['assigned_type'] = assigned_type
+            # Ensure assigned_type is correctly set for already assigned cells
+            assigned_type = cell['assigned_type']
             
-            # Update the pixel object
+            # Update the pixel object with final results
             pixel_i, pixel_j, local_idx = self.pt_map[idx]
             pixel = self.screen.pixels[pixel_i][pixel_j]
             pixel.types[local_idx] = assigned_type
@@ -351,12 +366,44 @@ class SequentialStipple(BaseStipple):
 
     def save(self, path):
         """
-        Save the state using Screen's save method.
+        Save selected attributes and the screen object to a file using pickle.
         """
-        self.screen.save(path)
+        parent_dir = os.path.dirname(path)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+
+        # Attributes to save (lines 25-35 and screen)
+        attrs_to_save = [
+            'max_area_fraction', 'length2pixel', 'radius', 'max_num_density',
+            'density_interp', 'voronoi_tessellation', 'padding_pts',
+            'cell_data', 'pt_map', 'all_pts_global', 'scale', 'screen'
+        ]
+        
+        save_dict = {attr: getattr(self, attr) for attr in attrs_to_save if hasattr(self, attr)}
+
+        try:
+            with open(path, 'wb') as f:
+                pickle.dump(save_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as e:
+            raise IOError(f"Failed to save SequentialStipple state to {path}: {e}")
 
     def load(self, path):
         """
-        Load the state using Screen's load method.
+        Load selected attributes and the screen object from a file using pickle.
         """
-        self.screen.load(path)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
+
+        try:
+            with open(path, 'rb') as f:
+                save_dict = pickle.load(f)
+            
+            if not isinstance(save_dict, dict):
+                raise TypeError(f"Loaded object is of type {type(save_dict)}, expected dict")
+            
+            for attr, value in save_dict.items():
+                setattr(self, attr, value)
+            
+            return self
+        except Exception as e:
+            raise RuntimeError(f"Failed to load SequentialStipple state from {path}: {e}")
