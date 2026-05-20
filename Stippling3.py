@@ -5,6 +5,7 @@ from matplotlib.path import Path
 import os
 import sys
 import pickle
+import colorsys
 
 # Adjust sys.path to import Pixels and Lloyd, CConversions
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -57,13 +58,29 @@ class SequentialStipple(BaseStipple):
             bounds_error=False, fill_value=0
         )
 
-    def _create_density_interpolator(self):
+    def _create_density_interpolator(self, mode="luminance"):
         """
-        Create density interpolator of an input image based on XYZ luminance.
+        Create density interpolator of an input image based on XYZ luminance or other modes.
         """
+        if self.image_data is None:
+            return
+
         xyz_data = self._get_xyz_data()
-        # Luminance is the Y channel (index 1)
-        density_funct = xyz_data[:, :, 1]
+        
+        if mode == "luminance":
+            # Luminance is the Y channel (index 1)
+            density_funct = xyz_data[:, :, 1]
+        elif mode == "uniform":
+            density_funct = np.ones((xyz_data.shape[0], xyz_data.shape[1]))
+        elif mode == "inverse_luminance":
+            density_funct = 1.0 - xyz_data[:, :, 1]
+        elif mode == "grayscale":
+            # Standard luma (0.299R + 0.587G + 0.114B) from the original image_data
+            gray = 0.299 * self.image_data[:, :, 0] + 0.587 * self.image_data[:, :, 1] + 0.114 * self.image_data[:, :, 2]
+            density_funct = gray.T  # Transpose (ni, nj) to (nj, ni) to align with xyz_data mapping
+        else:
+            raise ValueError(f"Unknown density mode: {mode}")
+            
         self.density_interp = self._create_interpolator(density_funct)
 
     def set_radius(self, radius):
@@ -84,10 +101,13 @@ class SequentialStipple(BaseStipple):
         pts = np.column_stack((x, y))
         return self.density_interp(pts)
 
-    def create_initial_sampling_points(self, seed=44):
+    def create_initial_sampling_points(self, seed=44, standard='luminance'):
         """
         Create initial sampling points using rejection sampling (demo2.py lines 126-159).
         """
+        if standard is not None:
+            self._create_density_interpolator(mode=standard)
+            
         np.random.seed(seed)
         nx, ny = self.screen.nx, self.screen.ny
         uw, uh = self.screen.pixel_width, self.screen.pixel_height
@@ -296,16 +316,71 @@ class SequentialStipple(BaseStipple):
                 self.cell_data[p1]['neighbors'].append(p2)
                 self.cell_data[p2]['neighbors'].append(p1)
 
-    def assign_colors(self, error=0.1):
-        """
-        Assign dome types to sampling points based on cell_data.
-        """
-        if not self.dome_library:
-            raise ValueError("dome_library must be set before calling assign_colors.")
-        if self.cell_data is None or self.pt_map is None:
-            raise ValueError("get_average_colors must be called before assign_colors.")
+    # methods of color mixing
+    def _arithematic(self, error):
+        # colors are mixed arithematically in the nearest neighbors.
+        max_radius = max(dt["radius"] for dt in self.dome_library)
+        for idx, cell in enumerate(self.cell_data):
+            target_lab = cell['lab']
+            
+            best_match_idx = -1
+            min_dist = float('inf')
+            
+            #corr_factor = np.pi * (max_radius / self.length2pixel)**2 / cell['area'] / self.max_area_fraction
+            corr_factor = 1.
+            for t_idx, d_type in enumerate(self.dome_library):
+                dist = cc.delta_e_cie76(target_lab, d_type['lab'] * corr_factor)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_match_idx = t_idx
+            
+            # Store assigned type if close enough, else store encoded negative index for refinement
+            cell['assigned_type'] = best_match_idx if min_dist < error else -1 * (best_match_idx + 2)
 
-        # Type Assignment (Sequential)
+        # 2. Refine unassigned cells by considering neighbors
+        for idx, cell in enumerate(self.cell_data):
+            # Recalculate corr_factor for the current cell as it depends on cell['area']
+            #corr_factor = np.pi * (max_radius / self.length2pixel)**2 / cell['area'] / self.max_area_fraction
+            corr_factor = 1
+            
+            if cell['assigned_type'] < -1:
+                # Recover the initial best match from encoded negative index
+                initial_best_t = -cell['assigned_type'] - 2
+                
+                # Identify assigned neighbors to balance color
+                neigh_indices = [n for n in cell['neighbors'] if self.cell_data[n]['assigned_type'] >= 0]
+                
+                if not neigh_indices:
+                    assigned_type = initial_best_t
+                else:
+                    total_area = sum(self.cell_data[n]['area'] for n in neigh_indices)
+                    # Correctly decode neighbor's encoded type before indexing dome_library
+                    mean_neigh_xyz = sum(self.dome_library[self.cell_data[n]['assigned_type']]['xyz'] for n in neigh_indices) * corr_factor / total_area
+                    
+                    best_t = -1
+                    min_err = float('inf')
+                    for t_idx, d_type in enumerate(self.dome_library):
+                        new_mean_xyz = (mean_neigh_xyz * total_area + d_type['xyz'] * corr_factor) / (total_area + cell['area'])
+                        err = np.linalg.norm(new_mean_xyz - cell['xyz'])
+                        if err < min_err:
+                            min_err = err
+                            best_t = t_idx
+                    assigned_type = best_t
+                
+                cell['assigned_type'] = assigned_type
+            
+            # Ensure assigned_type is correctly set for already assigned cells
+            assigned_type = cell['assigned_type']
+            
+            # Update the pixel object with final results
+            pixel_i, pixel_j, local_idx = self.pt_map[idx]
+            pixel = self.screen.pixels[pixel_i][pixel_j]
+            pixel.types[local_idx] = assigned_type
+            pixel.radii[local_idx] = self.dome_library[assigned_type]['radius'] * self.scale
+
+    def _area_weighted(self, error):
+        # When mixing colors, dome colors are mixed inversely weighted by cell areas.
+
         # 1. Assign the perfect matches
         max_radius = max(dt["radius"] for dt in self.dome_library)
         for idx, cell in enumerate(self.cell_data):
@@ -363,6 +438,95 @@ class SequentialStipple(BaseStipple):
             pixel = self.screen.pixels[pixel_i][pixel_j]
             pixel.types[local_idx] = assigned_type
             pixel.radii[local_idx] = self.dome_library[assigned_type]['radius'] * self.scale
+
+    def _Floyd_Steinberg(self, error):
+        # Floyd-Steinberg error diffusion on Voronoi cells.
+        max_radius = max(dt["radius"] for dt in self.dome_library)
+        N = len(self.all_pts_global)
+        
+        if N == 0:
+            return
+
+        # Prepare working colors in XYZ space
+        work_xyz = np.zeros((N, 3))
+        for i, cell in enumerate(self.cell_data):
+            work_xyz[i] = cell['xyz'].copy()
+            
+        # Build scan order (Serpentine based on Y coordinate)
+        pts = self.all_pts_global
+        area_avg = np.mean([c['area'] for c in self.cell_data])
+        row_step = np.sqrt(area_avg) if area_avg > 0 else 1.0
+        
+        row_indices = np.floor(pts[:, 1] / row_step).astype(int)
+        scan_order = []
+        for r in range(np.min(row_indices), np.max(row_indices) + 1):
+            in_row = np.where(row_indices == r)[0]
+            if len(in_row) == 0:
+                continue
+            sorted_in_row = in_row[np.argsort(pts[in_row, 0])]
+            if r % 2 == 1:
+                sorted_in_row = sorted_in_row[::-1]
+            scan_order.extend(sorted_in_row)
+
+        processed = np.zeros(N, dtype=bool)
+
+        for idx in scan_order:
+            cell = self.cell_data[idx]
+            
+            # Clip current XYZ to valid range [0, 1] before processing
+            current_xyz = np.clip(work_xyz[idx], 0.0, 1.0)
+            current_lab = cc.xyz_to_cielab(current_xyz)
+            
+            best_match_idx = -1
+            min_dist = float('inf')
+            
+            # Use corr_factor = 1.0 (similar to _arithematic)
+            corr_factor = 1.0
+            
+            for t_idx, d_type in enumerate(self.dome_library):
+                dist = cc.delta_e_cie76(current_lab, d_type['lab'] * corr_factor)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_match_idx = t_idx
+            
+            cell['assigned_type'] = best_match_idx
+            processed[idx] = True
+            
+            chosen_xyz = self.dome_library[best_match_idx]['xyz'] * corr_factor
+            err = current_xyz - chosen_xyz
+            
+            # Diffuse error to unprocessed neighbors
+            unprocessed_neighbors = [nb for nb in cell['neighbors'] if not processed[nb]]
+            if unprocessed_neighbors:
+                w = 1.0 / len(unprocessed_neighbors)
+                for nb in unprocessed_neighbors:
+                    work_xyz[nb] = np.clip(work_xyz[nb] + w * err, 0.0, 1.0)
+
+            # Update the pixel object with final results
+            pixel_i, pixel_j, local_idx = self.pt_map[idx]
+            pixel = self.screen.pixels[pixel_i][pixel_j]
+            pixel.types[local_idx] = best_match_idx
+            pixel.radii[local_idx] = self.dome_library[best_match_idx]['radius'] * self.scale
+
+
+    def assign_colors(self, error=0.1, method = 'arithematic'):
+        """
+        Assign dome types to sampling points based on cell_data.
+        """
+        if not self.dome_library:
+            raise ValueError("dome_library must be set before calling assign_colors.")
+        if self.cell_data is None or self.pt_map is None:
+            raise ValueError("get_average_colors must be called before assign_colors.")
+        
+        # Type Assignment (Sequential)
+        # 1. Assign the perfect matches
+        if method == "arithematic":
+            self._arithematic(error)
+        elif method == "area_weighted":
+            self._area_weighted(error)
+        elif method == "Floyd-Steinberg":
+            self._Floyd_Steinberg(error)
+
 
     def save(self, path):
         """

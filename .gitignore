@@ -2,3 +2,12 @@
 __pycache__/*
 Image_to_TIR.ipynb
 test/*
+visualize_interpolators.py
+compute_binary_whiteness.py
+.gitignore
+process_insets.py
+test_lloyd_padding.py
+test.sh
+*.md
+./test_conversions/*
+test_conversions/sanitycheck.py

@@ -52,11 +52,16 @@ def main():
     # 3. Execute the full stippling pipeline
     print("Step 1: Setting radius...")
     # The radius is a normalized value relative to the pixel width
-    stippler.set_radius(0.1)
+    stippler.set_radius(0.03)
     
     print("Step 2: Creating initial sampling points...")
-    # Uses rejection sampling based on the luminance of the image
-    stippler.create_initial_sampling_points(seed=44)
+    # Uses rejection sampling based on a specified density mapping.
+    # Options for 'standard':
+    #   - 'luminance' (default): Uses the Y channel (relative luminance). Points cluster in darker areas.
+    #   - 'inverse_luminance': Uses 1.0 - Y channel. Points cluster in lighter areas.
+    #   - 'grayscale': Uses standard Luma (0.299R + 0.587G + 0.114B) directly from RGB image data.
+    #   - 'uniform': Applies a flat, constant density across the entire image space.
+    stippler.create_initial_sampling_points(seed=44, standard='luminance')
     
     print("Step 3: Performing local relaxation (individual pixels)...")
     # Aligns points locally within each pixel to improve distribution
@@ -71,8 +76,13 @@ def main():
     stippler.get_average_colors(rnd_points=200)
     
     print("Step 6: Assigning final colors...")
-    # Assigns the best-matching dome type from the library to each sampling point
-    stippler.assign_colors(error=0.1)
+    # Assigns the best-matching dome type from the library to each sampling point.
+    # Options for 'method':
+    #   - 'arithematic' (default): Assigns the closest color locally, and balances remaining error by uniformly averaging with neighbors.
+    #   - 'area_weighted': Similar to arithematic but inverse-weights the color mixing iteratively based on Voronoi cell areas.
+    #   - 'Floyd-Steinberg': Adapts classic Floyd-Steinberg error diffusion onto the unstructured Voronoi grid. 
+    #                        Scans cells top-to-bottom and diffuses RGB quantization errors to neighboring unprocessed cells.
+    stippler.assign_colors(error=0.1, method='Floyd-Steinberg')
     
     # 4. Visualize and save the result
     print("Generating visualization...")

@@ -73,7 +73,7 @@ def main():
 
     # Subplot 0: Forward Stippling
     axes[1].set_facecolor('white')
-    forward_screen.visualize([fig, axes[1]], forward_styles, use_scatter=True)
+    forward_screen.visualize([fig, axes[1]], forward_styles, use_collection=True)
     axes[1].set_title("Forward Stippling (Dark on White)")
     axes[1].set_xlim(0, width)
     axes[1].set_ylim(0, height)
@@ -82,7 +82,7 @@ def main():
     
     # Subplot 1: Reverse Stippling
     axes[2].set_aspect('equal')
-    reverse_screen.visualize([fig, axes[2]], reverse_styles, use_scatter=True)
+    reverse_screen.visualize([fig, axes[2]], reverse_styles, use_collection=True)
     axes[2].set_title("Reverse Stippling (Light on Black)")
     axes[2].set_xlim(0, width)
     axes[2].set_ylim(0, height)

@@ -20,10 +20,16 @@ Extends the base functionality with the `MilisecondsStipple` class, implementing
 - **Forward Multi-tone Color Stippling**: Optimized for placing dark stipples on a white background.
 - **Reverse Multi-tone Color Stippling**: Optimized for placing light stipples on a black background, preventing overcrowding in dark regions.
 
+### 4. [`Stippling3.py`](Stippling3.py)
+Introduces the `SequentialStipple` class, refactored for sequential and multi-toned dithering tasks utilizing customizable, pre-defined dome libraries (palettes).
+- **Dynamic Density Mapping**: Features options for generating density maps from luminance, inverse luminance, grayscale, or uniformly.
+- **Color Assignment & Error Diffusion**: Includes multiple quantization methods (`arithematic`, `area_weighted`, and `Floyd-Steinberg`) to intelligently allocate palette colors onto unstructured scattered Voronoi cells while diffusing color discrepancies contextually.
+
 ## Usage and Examples
 
 - **[`demo.ipynb`](demo.ipynb)**: Interactive demonstration of Lloyd relaxation with both synthetic (Gaussian) and image-based density functions.
 - **[`example_stippling2.py`](example_stippling2.py)**: A complete script demonstrating the application of forward and reverse stippling on a color image, including visualization.
+- **[`example_stippling3.py`](example_stippling3.py)**: A comprehensive script executing the sequential multi-toned stippling workflow. Demonstrates density-based rejection sampling alongside Voronoi-based color assignment via advanced dithering methods like Floyd-Steinberg error diffusion.
 - **[`visualize_interpolators.py`](visualize_interpolators.py)**: Verification script to ensure that the grid interpolators correctly reconstruct the source image channels.
 
 ## Requirements
