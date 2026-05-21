@@ -30,7 +30,6 @@ Introduces the `SequentialStipple` class, refactored for sequential and multi-to
 - **[`demo.ipynb`](demo.ipynb)**: Interactive demonstration of Lloyd relaxation with both synthetic (Gaussian) and image-based density functions.
 - **[`example_stippling2.py`](example_stippling2.py)**: A complete script demonstrating the application of forward and reverse stippling on a color image, including visualization.
 - **[`example_stippling3.py`](example_stippling3.py)**: A comprehensive script executing the sequential multi-toned stippling workflow. Demonstrates density-based rejection sampling alongside Voronoi-based color assignment via advanced dithering methods like Floyd-Steinberg error diffusion.
-- **[`visualize_interpolators.py`](visualize_interpolators.py)**: Verification script to ensure that the grid interpolators correctly reconstruct the source image channels.
 
 ## Requirements
 

@@ -63,26 +63,23 @@ def main():
     #   - 'uniform': Applies a flat, constant density across the entire image space.
     stippler.create_initial_sampling_points(seed=44, standard='luminance')
     
-    print("Step 3: Performing local relaxation (individual pixels)...")
+    print("Step 3: Performing relaxation of sampling points (individual pixels)...")
     # Aligns points locally within each pixel to improve distribution
     stippler.relax_individual_pixels(iterations=20)
-    
-    print("Step 4: Performing global relaxation (entire screen)...")
     # Performs Lloyd relaxation across all points to achieve a global uniform distribution
     stippler.relax_entire_screen(iterations=50)
     
-    print("Step 5: Computing average colors for cells...")
+    print("Step 4: Assigning final colors...")
     # Calculates the average color within each Voronoi cell
     stippler.get_average_colors(rnd_points=200)
-    
-    print("Step 6: Assigning final colors...")
+   
     # Assigns the best-matching dome type from the library to each sampling point.
     # Options for 'method':
     #   - 'arithematic' (default): Assigns the closest color locally, and balances remaining error by uniformly averaging with neighbors.
     #   - 'area_weighted': Similar to arithematic but inverse-weights the color mixing iteratively based on Voronoi cell areas.
     #   - 'Floyd-Steinberg': Adapts classic Floyd-Steinberg error diffusion onto the unstructured Voronoi grid. 
     #                        Scans cells top-to-bottom and diffuses RGB quantization errors to neighboring unprocessed cells.
-    stippler.assign_colors(error=0.1, method='Floyd-Steinberg')
+    stippler.assign_colors(error=1.0, method='Floyd-Steinberg')
     
     # 4. Visualize and save the result
     print("Generating visualization...")
